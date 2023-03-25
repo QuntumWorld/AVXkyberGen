@@ -4,3 +4,6 @@ tvecs512
 tvecs512-90s
 tvecs768
 tvecs768-90s
+
+build/*
+avx2/*.o

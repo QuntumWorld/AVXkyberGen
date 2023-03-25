@@ -97,6 +97,10 @@ libpqcrystals_kyber1024_avx2.so: $(SOURCES) $(HEADERS) symmetric-shake.c
 test_kyber512: $(SOURCESKECCAK) $(HEADERSKECCAK) test_kyber.c randombytes.c
 	$(CC) $(CFLAGS) -DKYBER_K=2 $(SOURCESKECCAK) randombytes.c test_kyber.c -o test_kyber512
 
+example: $(SOURCESKECCAK) $(HEADERSKECCAK) example.c randombytes.c
+	$(CC) $(CFLAGS) -DKYBER_K=2 $(SOURCESKECCAK) randombytes.c example.c -o example
+
+
 test_kyber768: $(SOURCESKECCAK) $(HEADERSKECCAK) test_kyber.c randombytes.c
 	$(CC) $(CFLAGS) -DKYBER_K=3 $(SOURCESKECCAK) randombytes.c test_kyber.c -o test_kyber768
 
