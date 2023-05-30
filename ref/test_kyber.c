@@ -1,96 +1,94 @@
-#include "api.h"
-#include "poly.h"
-#include "randombytes.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include "kem.h"
+#include "randombytes.h"
 
-#define NTESTS 100
+#define NTESTS 1000
 
-int test_keys()
+static int test_keys()
 {
-  unsigned char key_a[KYBER_SYMBYTES], key_b[KYBER_SYMBYTES];
-  unsigned char pk[KYBER_PUBLICKEYBYTES];
-  unsigned char sendb[KYBER_CIPHERTEXTBYTES];
-  unsigned char sk_a[KYBER_SECRETKEYBYTES];
-  int i;
+  uint8_t pk[CRYPTO_PUBLICKEYBYTES];
+  uint8_t sk[CRYPTO_SECRETKEYBYTES];
+  uint8_t ct[CRYPTO_CIPHERTEXTBYTES];
+  uint8_t key_a[CRYPTO_BYTES];
+  uint8_t key_b[CRYPTO_BYTES];
 
-  for(i=0; i<NTESTS; i++)
-  {
-    //Alice generates a public key
-    crypto_kem_keypair(pk, sk_a);
+  //Alice generates a public key
+  crypto_kem_keypair(pk, sk);
 
-    //Bob derives a secret key and creates a response
-    crypto_kem_enc(sendb, key_b, pk);
-  
-    //Alice uses Bobs response to get her secret key
-    crypto_kem_dec(key_a, sendb, sk_a);
+  //Bob derives a secret key and creates a response
+  crypto_kem_enc(ct, key_b, pk);
 
-    if(memcmp(key_a, key_b, KYBER_SYMBYTES))
-      printf("ERROR keys\n");
+  //Alice uses Bobs response to get her shared key
+  crypto_kem_dec(key_a, ct, sk);
+
+  if(memcmp(key_a, key_b, CRYPTO_BYTES)) {
+    printf("ERROR keys\n");
+    return 1;
   }
 
   return 0;
 }
 
-
-int test_invalid_sk_a()
+static int test_invalid_sk_a()
 {
-  unsigned char sk_a[KYBER_SECRETKEYBYTES];
-  unsigned char key_a[KYBER_SYMBYTES], key_b[KYBER_SYMBYTES];
-  unsigned char pk[KYBER_PUBLICKEYBYTES];
-  unsigned char sendb[KYBER_CIPHERTEXTBYTES];
-  int i;
+  uint8_t pk[CRYPTO_PUBLICKEYBYTES];
+  uint8_t sk[CRYPTO_SECRETKEYBYTES];
+  uint8_t ct[CRYPTO_CIPHERTEXTBYTES];
+  uint8_t key_a[CRYPTO_BYTES];
+  uint8_t key_b[CRYPTO_BYTES];
 
-  for(i=0; i<NTESTS; i++)
-  {
-    //Alice generates a public key
-    crypto_kem_keypair(pk, sk_a);
+  //Alice generates a public key
+  crypto_kem_keypair(pk, sk);
 
-    //Bob derives a secret key and creates a response
-    crypto_kem_enc(sendb, key_b, pk);
+  //Bob derives a secret key and creates a response
+  crypto_kem_enc(ct, key_b, pk);
 
-    //Replace secret key with random values
-    randombytes(sk_a, KYBER_SECRETKEYBYTES);
+  //Replace secret key with random values
+  randombytes(sk, CRYPTO_SECRETKEYBYTES);
 
-  
-    //Alice uses Bobs response to get her secre key
-    crypto_kem_dec(key_a, sendb, sk_a);
-    
-    if(!memcmp(key_a, key_b, KYBER_SYMBYTES))
-      printf("ERROR invalid sk_a\n");
+  //Alice uses Bobs response to get her shared key
+  crypto_kem_dec(key_a, ct, sk);
+
+  if(!memcmp(key_a, key_b, CRYPTO_BYTES)) {
+    printf("ERROR invalid sk\n");
+    return 1;
   }
 
   return 0;
 }
 
-
-int test_invalid_ciphertext()
+static int test_invalid_ciphertext()
 {
-  unsigned char sk_a[KYBER_SECRETKEYBYTES];
-  unsigned char key_a[KYBER_SYMBYTES], key_b[KYBER_SYMBYTES];
-  unsigned char pk[KYBER_PUBLICKEYBYTES];
-  unsigned char sendb[KYBER_CIPHERTEXTBYTES];
-  int i;
+  uint8_t pk[CRYPTO_PUBLICKEYBYTES];
+  uint8_t sk[CRYPTO_SECRETKEYBYTES];
+  uint8_t ct[CRYPTO_CIPHERTEXTBYTES];
+  uint8_t key_a[CRYPTO_BYTES];
+  uint8_t key_b[CRYPTO_BYTES];
+  uint8_t b;
   size_t pos;
 
-  for(i=0; i<NTESTS; i++)
-  {
-    randombytes((unsigned char *)&pos, sizeof(size_t));
+  do {
+    randombytes(&b, sizeof(uint8_t));
+  } while(!b);
+  randombytes((uint8_t *)&pos, sizeof(size_t));
 
-    //Alice generates a public key
-    crypto_kem_keypair(pk, sk_a);
+  //Alice generates a public key
+  crypto_kem_keypair(pk, sk);
 
-    //Bob derives a secret key and creates a response
-    crypto_kem_enc(sendb, key_b, pk);
+  //Bob derives a secret key and creates a response
+  crypto_kem_enc(ct, key_b, pk);
 
-    //Change some byte in the ciphertext (i.e., encapsulated key)
-    sendb[pos % KYBER_CIPHERTEXTBYTES] ^= 23;
-  
-    //Alice uses Bobs response to get her secre key
-    crypto_kem_dec(key_a, sendb, sk_a);
+  //Change some byte in the ciphertext (i.e., encapsulated key)
+  ct[pos % CRYPTO_CIPHERTEXTBYTES] ^= b;
 
-    if(!memcmp(key_a, key_b, KYBER_SYMBYTES))
-      printf("ERROR invalid ciphertext\n");
+  //Alice uses Bobs response to get her shared key
+  crypto_kem_dec(key_a, ct, sk);
+
+  if(!memcmp(key_a, key_b, CRYPTO_BYTES)) {
+    printf("ERROR invalid ciphertext\n");
+    return 1;
   }
 
   return 0;
@@ -98,13 +96,20 @@ int test_invalid_ciphertext()
 
 int main(void)
 {
-  test_keys();
-  test_invalid_sk_a();
-  test_invalid_ciphertext();
-  
-  printf("KYBER_SECRETKEYBYTES:  %d\n",KYBER_SECRETKEYBYTES);
-  printf("KYBER_PUBLICKEYBYTES:  %d\n",KYBER_PUBLICKEYBYTES);
-  printf("KYBER_CIPHERTEXTBYTES: %d\n",KYBER_CIPHERTEXTBYTES);
+  unsigned int i;
+  int r;
+
+  for(i=0;i<NTESTS;i++) {
+    r  = test_keys();
+    r |= test_invalid_sk_a();
+    r |= test_invalid_ciphertext();
+    if(r)
+      return 1;
+  }
+
+  printf("CRYPTO_SECRETKEYBYTES:  %d\n",CRYPTO_SECRETKEYBYTES);
+  printf("CRYPTO_PUBLICKEYBYTES:  %d\n",CRYPTO_PUBLICKEYBYTES);
+  printf("CRYPTO_CIPHERTEXTBYTES: %d\n",CRYPTO_CIPHERTEXTBYTES);
 
   return 0;
 }

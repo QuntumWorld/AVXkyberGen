@@ -1,234 +1,307 @@
-#include <stdio.h>
+#include <stdint.h>
+#include <immintrin.h>
+#include <string.h>
+#include "params.h"
 #include "polyvec.h"
-#include "fips202.h"
-#include "cbd.h"
-#include "reduce.h"
+#include "poly.h"
+#include "ntt.h"
+#include "consts.h"
 
-#if (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 352))
-void polyvec_compress(unsigned char *r, const polyvec *a)
+#if (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 320))
+static void poly_compress10(uint8_t r[320], const poly * restrict a)
 {
-  int i,j,k;
-  uint16_t t[8];
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/8;j++)
-    {
-      for(k=0;k<8;k++)
-        t[k] = ((((uint32_t)freeze(a->vec[i].coeffs[8*j+k]) << 11) + KYBER_Q/2)/ KYBER_Q) & 0x7ff;
+  unsigned int i;
+  __m256i f0, f1, f2;
+  __m128i t0, t1;
+  const __m256i v = _mm256_load_si256(&qdata.vec[_16XV/16]);
+  const __m256i v8 = _mm256_slli_epi16(v,3);
+  const __m256i off = _mm256_set1_epi16(15);
+  const __m256i shift1 = _mm256_set1_epi16(1 << 12);
+  const __m256i mask = _mm256_set1_epi16(1023);
+  const __m256i shift2 = _mm256_set1_epi64x((1024LL << 48) + (1LL << 32) + (1024 << 16) + 1);
+  const __m256i sllvdidx = _mm256_set1_epi64x(12);
+  const __m256i shufbidx = _mm256_set_epi8( 8, 4, 3, 2, 1, 0,-1,-1,-1,-1,-1,-1,12,11,10, 9,
+                                           -1,-1,-1,-1,-1,-1,12,11,10, 9, 8, 4, 3, 2, 1, 0);
 
-      r[11*j+ 0] =  t[0] & 0xff;
-      r[11*j+ 1] = (t[0] >>  8) | ((t[1] & 0x1f) << 3);
-      r[11*j+ 2] = (t[1] >>  5) | ((t[2] & 0x03) << 6);
-      r[11*j+ 3] = (t[2] >>  2) & 0xff;
-      r[11*j+ 4] = (t[2] >> 10) | ((t[3] & 0x7f) << 1);
-      r[11*j+ 5] = (t[3] >>  7) | ((t[4] & 0x0f) << 4);
-      r[11*j+ 6] = (t[4] >>  4) | ((t[5] & 0x01) << 7);
-      r[11*j+ 7] = (t[5] >>  1) & 0xff;
-      r[11*j+ 8] = (t[5] >>  9) | ((t[6] & 0x3f) << 2);
-      r[11*j+ 9] = (t[6] >>  6) | ((t[7] & 0x07) << 5);
-      r[11*j+10] = (t[7] >>  3);
-    }
-    r += 352;
+  for(i=0;i<KYBER_N/16;i++) {
+    f0 = _mm256_load_si256(&a->vec[i]);
+    f1 = _mm256_mullo_epi16(f0,v8);
+    f2 = _mm256_add_epi16(f0,off);
+    f0 = _mm256_slli_epi16(f0,3);
+    f0 = _mm256_mulhi_epi16(f0,v);
+    f2 = _mm256_sub_epi16(f1,f2);
+    f1 = _mm256_andnot_si256(f1,f2);
+    f1 = _mm256_srli_epi16(f1,15);
+    f0 = _mm256_sub_epi16(f0,f1);
+    f0 = _mm256_mulhrs_epi16(f0,shift1);
+    f0 = _mm256_and_si256(f0,mask);
+    f0 = _mm256_madd_epi16(f0,shift2);
+    f0 = _mm256_sllv_epi32(f0,sllvdidx);
+    f0 = _mm256_srli_epi64(f0,12);
+    f0 = _mm256_shuffle_epi8(f0,shufbidx);
+    t0 = _mm256_castsi256_si128(f0);
+    t1 = _mm256_extracti128_si256(f0,1);
+    t0 = _mm_blend_epi16(t0,t1,0xE0);
+    _mm_storeu_si128((__m128i *)&r[20*i+ 0],t0);
+    memcpy(&r[20*i+16],&t1,4);
   }
 }
 
-void polyvec_decompress(polyvec *r, const unsigned char *a)
+static void poly_decompress10(poly * restrict r, const uint8_t a[320+12])
 {
-  int i,j;
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/8;j++)
-    {
-      r->vec[i].coeffs[8*j+0] =  (((a[11*j+ 0]       | (((uint32_t)a[11*j+ 1] & 0x07) << 8)) * KYBER_Q) +1024) >> 11;
-      r->vec[i].coeffs[8*j+1] = ((((a[11*j+ 1] >> 3) | (((uint32_t)a[11*j+ 2] & 0x3f) << 5)) * KYBER_Q) +1024) >> 11;
-      r->vec[i].coeffs[8*j+2] = ((((a[11*j+ 2] >> 6) | (((uint32_t)a[11*j+ 3] & 0xff) << 2) |  (((uint32_t)a[11*j+ 4] & 0x01) << 10)) * KYBER_Q) + 1024) >> 11;
-      r->vec[i].coeffs[8*j+3] = ((((a[11*j+ 4] >> 1) | (((uint32_t)a[11*j+ 5] & 0x0f) << 7)) * KYBER_Q) + 1024) >> 11;
-      r->vec[i].coeffs[8*j+4] = ((((a[11*j+ 5] >> 4) | (((uint32_t)a[11*j+ 6] & 0x7f) << 4)) * KYBER_Q) + 1024) >> 11;
-      r->vec[i].coeffs[8*j+5] = ((((a[11*j+ 6] >> 7) | (((uint32_t)a[11*j+ 7] & 0xff) << 1) |  (((uint32_t)a[11*j+ 8] & 0x03) <<  9)) * KYBER_Q) + 1024) >> 11;
-      r->vec[i].coeffs[8*j+6] = ((((a[11*j+ 8] >> 2) | (((uint32_t)a[11*j+ 9] & 0x1f) << 6)) * KYBER_Q) + 1024) >> 11;
-      r->vec[i].coeffs[8*j+7] = ((((a[11*j+ 9] >> 5) | (((uint32_t)a[11*j+10] & 0xff) << 3)) * KYBER_Q) + 1024) >> 11;
-    }
-    a += 352;
+  unsigned int i;
+  __m256i f;
+  const __m256i q = _mm256_set1_epi32((KYBER_Q << 16) + 4*KYBER_Q);
+  const __m256i shufbidx = _mm256_set_epi8(11,10,10, 9, 9, 8, 8, 7,
+                                            6, 5, 5, 4, 4, 3, 3, 2,
+                                            9, 8, 8, 7, 7, 6, 6, 5,
+                                            4, 3, 3, 2, 2, 1, 1, 0);
+  const __m256i sllvdidx = _mm256_set1_epi64x(4);
+  const __m256i mask = _mm256_set1_epi32((32736 << 16) + 8184);
+
+  for(i=0;i<KYBER_N/16;i++) {
+    f = _mm256_loadu_si256((__m256i *)&a[20*i]);
+    f = _mm256_permute4x64_epi64(f,0x94);
+    f = _mm256_shuffle_epi8(f,shufbidx);
+    f = _mm256_sllv_epi32(f,sllvdidx);
+    f = _mm256_srli_epi16(f,1);
+    f = _mm256_and_si256(f,mask);
+    f = _mm256_mulhrs_epi16(f,q);
+    _mm256_store_si256(&r->vec[i],f);
   }
 }
 
-#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 320))
-
-void polyvec_compress(unsigned char *r, const polyvec *a)
+#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 352))
+static void poly_compress11(uint8_t r[352+2], const poly * restrict a)
 {
-  int i,j,k;
-  uint16_t t[4];
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/4;j++)
-    {
-      for(k=0;k<4;k++)
-        t[k] = ((((uint32_t)freeze(a->vec[i].coeffs[4*j+k]) << 10) + KYBER_Q/2)/ KYBER_Q) & 0x3ff;
+  unsigned int i;
+  __m256i f0, f1, f2;
+  __m128i t0, t1;
+  const __m256i v = _mm256_load_si256(&qdata.vec[_16XV/16]);
+  const __m256i v8 = _mm256_slli_epi16(v,3);
+  const __m256i off = _mm256_set1_epi16(36);
+  const __m256i shift1 = _mm256_set1_epi16(1 << 13);
+  const __m256i mask = _mm256_set1_epi16(2047);
+  const __m256i shift2 = _mm256_set1_epi64x((2048LL << 48) + (1LL << 32) + (2048 << 16) + 1);
+  const __m256i sllvdidx = _mm256_set1_epi64x(10);
+  const __m256i srlvqidx = _mm256_set_epi64x(30,10,30,10);
+  const __m256i shufbidx = _mm256_set_epi8( 4, 3, 2, 1, 0, 0,-1,-1,-1,-1,10, 9, 8, 7, 6, 5,
+                                           -1,-1,-1,-1,-1,10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 
-      r[5*j+ 0] =  t[0] & 0xff;
-      r[5*j+ 1] = (t[0] >>  8) | ((t[1] & 0x3f) << 2);
-      r[5*j+ 2] = (t[1] >>  6) | ((t[2] & 0x0f) << 4);
-      r[5*j+ 3] = (t[2] >>  4) | ((t[3] & 0x03) << 6);
-      r[5*j+ 4] = (t[3] >>  2);
-    }
-    r += 320;
+  for(i=0;i<KYBER_N/16;i++) {
+    f0 = _mm256_load_si256(&a->vec[i]);
+    f1 = _mm256_mullo_epi16(f0,v8);
+    f2 = _mm256_add_epi16(f0,off);
+    f0 = _mm256_slli_epi16(f0,3);
+    f0 = _mm256_mulhi_epi16(f0,v);
+    f2 = _mm256_sub_epi16(f1,f2);
+    f1 = _mm256_andnot_si256(f1,f2);
+    f1 = _mm256_srli_epi16(f1,15);
+    f0 = _mm256_sub_epi16(f0,f1);
+    f0 = _mm256_mulhrs_epi16(f0,shift1);
+    f0 = _mm256_and_si256(f0,mask);
+    f0 = _mm256_madd_epi16(f0,shift2);
+    f0 = _mm256_sllv_epi32(f0,sllvdidx);
+    f1 = _mm256_bsrli_epi128(f0,8);
+    f0 = _mm256_srlv_epi64(f0,srlvqidx);
+    f1 = _mm256_slli_epi64(f1,34);
+    f0 = _mm256_add_epi64(f0,f1);
+    f0 = _mm256_shuffle_epi8(f0,shufbidx);
+    t0 = _mm256_castsi256_si128(f0);
+    t1 = _mm256_extracti128_si256(f0,1);
+    t0 = _mm_blendv_epi8(t0,t1,_mm256_castsi256_si128(shufbidx));
+    _mm_storeu_si128((__m128i *)&r[22*i+ 0],t0);
+    _mm_storel_epi64((__m128i *)&r[22*i+16],t1);
   }
 }
 
-void polyvec_decompress(polyvec *r, const unsigned char *a)
+static void poly_decompress11(poly * restrict r, const uint8_t a[352+10])
 {
-  int i,j;
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/4;j++)
-    {
-      r->vec[i].coeffs[4*j+0] =  (((a[5*j+ 0]       | (((uint32_t)a[5*j+ 1] & 0x03) << 8)) * KYBER_Q) + 512) >> 10;
-      r->vec[i].coeffs[4*j+1] = ((((a[5*j+ 1] >> 2) | (((uint32_t)a[5*j+ 2] & 0x0f) << 6)) * KYBER_Q) + 512) >> 10;
-      r->vec[i].coeffs[4*j+2] = ((((a[5*j+ 2] >> 4) | (((uint32_t)a[5*j+ 3] & 0x3f) << 4)) * KYBER_Q) + 512) >> 10;
-      r->vec[i].coeffs[4*j+3] = ((((a[5*j+ 3] >> 6) | (((uint32_t)a[5*j+ 4] & 0xff) << 2)) * KYBER_Q) + 512) >> 10;
-    }
-    a += 320;
+  unsigned int i;
+  __m256i f;
+  const __m256i q = _mm256_load_si256(&qdata.vec[_16XQ/16]);
+  const __m256i shufbidx = _mm256_set_epi8(13,12,12,11,10, 9, 9, 8,
+                                            8, 7, 6, 5, 5, 4, 4, 3,
+                                           10, 9, 9, 8, 7, 6, 6, 5,
+                                            5, 4, 3, 2, 2, 1, 1, 0);
+  const __m256i srlvdidx = _mm256_set_epi32(0,0,1,0,0,0,1,0);
+  const __m256i srlvqidx = _mm256_set_epi64x(2,0,2,0);
+  const __m256i shift = _mm256_set_epi16(4,32,1,8,32,1,4,32,4,32,1,8,32,1,4,32);
+  const __m256i mask = _mm256_set1_epi16(32752);
+
+  for(i=0;i<KYBER_N/16;i++) {
+    f = _mm256_loadu_si256((__m256i *)&a[22*i]);
+    f = _mm256_permute4x64_epi64(f,0x94);
+    f = _mm256_shuffle_epi8(f,shufbidx);
+    f = _mm256_srlv_epi32(f,srlvdidx);
+    f = _mm256_srlv_epi64(f,srlvqidx);
+    f = _mm256_mullo_epi16(f,shift);
+    f = _mm256_srli_epi16(f,1);
+    f = _mm256_and_si256(f,mask);
+    f = _mm256_mulhrs_epi16(f,q);
+    _mm256_store_si256(&r->vec[i],f);
   }
 }
 
-#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 288))
-
-void polyvec_compress(unsigned char *r, const polyvec *a)
-{
-  int i,j,k;
-  uint16_t t[8];
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/8;j++)
-    {
-      for(k=0;k<8;k++)
-        t[k] = ((((uint32_t)freeze(a->vec[i].coeffs[8*j+k]) << 9) + KYBER_Q/2)/ KYBER_Q) & 0x1ff;
-
-      r[9*j+ 0] =  t[0] & 0xff;
-      r[9*j+ 1] = (t[0] >>  8) | ((t[1] & 0x7f) << 1);
-      r[9*j+ 2] = (t[1] >>  7) | ((t[2] & 0x3f) << 2);
-      r[9*j+ 3] = (t[2] >>  6) | ((t[3] & 0x1f) << 3);
-      r[9*j+ 4] = (t[3] >>  5) | ((t[4] & 0x0f) << 4);
-      r[9*j+ 5] = (t[4] >>  4) | ((t[5] & 0x07) << 5);
-      r[9*j+ 6] = (t[5] >>  3) | ((t[6] & 0x03) << 6);
-      r[9*j+ 7] = (t[6] >>  2) | ((t[7] & 0x01) << 7);
-      r[9*j+ 8] = (t[7] >>  1);
-    }
-    r += 288;
-  }
-}
-
-void polyvec_decompress(polyvec *r, const unsigned char *a)
-{
-  int i,j;
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N/8;j++)
-    {
-      r->vec[i].coeffs[8*j+0] =  (((a[9*j+ 0]       | (((uint32_t)a[9*j+ 1] & 0x01) << 8)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+1] = ((((a[9*j+ 1] >> 1) | (((uint32_t)a[9*j+ 2] & 0x03) << 7)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+2] = ((((a[9*j+ 2] >> 2) | (((uint32_t)a[9*j+ 3] & 0x07) << 6)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+3] = ((((a[9*j+ 3] >> 3) | (((uint32_t)a[9*j+ 4] & 0x0f) << 5)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+4] = ((((a[9*j+ 4] >> 4) | (((uint32_t)a[9*j+ 5] & 0x1f) << 4)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+5] = ((((a[9*j+ 5] >> 5) | (((uint32_t)a[9*j+ 6] & 0x3f) << 3)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+6] = ((((a[9*j+ 6] >> 6) | (((uint32_t)a[9*j+ 7] & 0x7f) << 2)) * KYBER_Q) + 256) >> 9;
-      r->vec[i].coeffs[8*j+7] = ((((a[9*j+ 7] >> 7) | (((uint32_t)a[9*j+ 8] & 0xff) << 1)) * KYBER_Q) + 256) >> 9;
-    }
-    a += 288;
-  }
-}
-
-
-#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 256))
-
-void polyvec_compress(unsigned char *r, const polyvec *a)
-{
-  int i,j,k;
-  uint16_t t;
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N;j++)
-    {
-      r[j] = ((((uint32_t)freeze(a->vec[i].coeffs[j]) << 8) + KYBER_Q/2)/ KYBER_Q) & 0xff;
-    }
-    r += 256;
-  }
-}
-
-void polyvec_decompress(polyvec *r, const unsigned char *a)
-{
-  int i,j;
-  for(i=0;i<KYBER_K;i++)
-  {
-    for(j=0;j<KYBER_N;j++)
-    {
-      r->vec[i].coeffs[j] = ((a[j] * KYBER_Q) + 128) >> 8;
-    }
-    a += 256;
-  }
-}
-
-#else 
-  #error "Unsupported compression of polyvec"
 #endif
 
-void polyvec_tobytes(unsigned char *r, const polyvec *a)
+/*************************************************
+* Name:        polyvec_compress
+*
+* Description: Compress and serialize vector of polynomials
+*
+* Arguments:   - uint8_t *r: pointer to output byte array
+*                            (needs space for KYBER_POLYVECCOMPRESSEDBYTES)
+*              - polyvec *a: pointer to input vector of polynomials
+**************************************************/
+void polyvec_compress(uint8_t r[KYBER_POLYVECCOMPRESSEDBYTES+2], const polyvec *a)
 {
-  int i;
+  unsigned int i;
+
+#if (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 320))
+  for(i=0;i<KYBER_K;i++)
+    poly_compress10(&r[320*i],&a->vec[i]);
+#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 352))
+  for(i=0;i<KYBER_K;i++)
+    poly_compress11(&r[352*i],&a->vec[i]);
+#endif
+}
+
+/*************************************************
+* Name:        polyvec_decompress
+*
+* Description: De-serialize and decompress vector of polynomials;
+*              approximate inverse of polyvec_compress
+*
+* Arguments:   - polyvec *r: pointer to output vector of polynomials
+*              - const uint8_t *a: pointer to input byte array
+*                                  (of length KYBER_POLYVECCOMPRESSEDBYTES)
+**************************************************/
+void polyvec_decompress(polyvec *r, const uint8_t a[KYBER_POLYVECCOMPRESSEDBYTES+12])
+{
+  unsigned int i;
+
+#if (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 320))
+  for(i=0;i<KYBER_K;i++)
+    poly_decompress10(&r->vec[i],&a[320*i]);
+#elif (KYBER_POLYVECCOMPRESSEDBYTES == (KYBER_K * 352))
+  for(i=0;i<KYBER_K;i++)
+    poly_decompress11(&r->vec[i],&a[352*i]);
+#endif
+}
+
+/*************************************************
+* Name:        polyvec_tobytes
+*
+* Description: Serialize vector of polynomials
+*
+* Arguments:   - uint8_t *r: pointer to output byte array
+*                            (needs space for KYBER_POLYVECBYTES)
+*              - polyvec *a: pointer to input vector of polynomials
+**************************************************/
+void polyvec_tobytes(uint8_t r[KYBER_POLYVECBYTES], const polyvec *a)
+{
+  unsigned int i;
   for(i=0;i<KYBER_K;i++)
     poly_tobytes(r+i*KYBER_POLYBYTES, &a->vec[i]);
 }
 
-void polyvec_frombytes(polyvec *r, const unsigned char *a)
+/*************************************************
+* Name:        polyvec_frombytes
+*
+* Description: De-serialize vector of polynomials;
+*              inverse of polyvec_tobytes
+*
+* Arguments:   - uint8_t *r: pointer to output byte array
+*              - const polyvec *a: pointer to input vector of polynomials
+*                                  (of length KYBER_POLYVECBYTES)
+**************************************************/
+void polyvec_frombytes(polyvec *r, const uint8_t a[KYBER_POLYVECBYTES])
 {
-  int i;
+  unsigned int i;
   for(i=0;i<KYBER_K;i++)
     poly_frombytes(&r->vec[i], a+i*KYBER_POLYBYTES);
 }
 
+/*************************************************
+* Name:        polyvec_ntt
+*
+* Description: Apply forward NTT to all elements of a vector of polynomials
+*
+* Arguments:   - polyvec *r: pointer to in/output vector of polynomials
+**************************************************/
 void polyvec_ntt(polyvec *r)
 {
-  int i;
+  unsigned int i;
   for(i=0;i<KYBER_K;i++)
     poly_ntt(&r->vec[i]);
 }
 
-void polyvec_invntt(polyvec *r)
+/*************************************************
+* Name:        polyvec_invntt_tomont
+*
+* Description: Apply inverse NTT to all elements of a vector of polynomials
+*              and multiply by Montgomery factor 2^16
+*
+* Arguments:   - polyvec *r: pointer to in/output vector of polynomials
+**************************************************/
+void polyvec_invntt_tomont(polyvec *r)
 {
-  int i;
+  unsigned int i;
   for(i=0;i<KYBER_K;i++)
-    poly_invntt(&r->vec[i]);
-}
-  
-void polyvec_pointwise_acc(poly *r, const polyvec *a, const polyvec *b)
-{
-#if KYBER_K == 2
-  polyvec_pointwise_acc_k2(r, a, b);
-#elif KYBER_K == 3
-  polyvec_pointwise_acc_k3(r, a, b);
-#elif KYBER_K == 4
-  polyvec_pointwise_acc_k4(r, a, b);
-#else
-  int i,j;
-  uint16_t t;
-  for(j=0;j<KYBER_N;j++)
-  {
-    t = montgomery_reduce(4613* (uint32_t)b->vec[0].coeffs[j]); // 4613 = 2^{2*18} % q
-    r->coeffs[j] = montgomery_reduce(a->vec[0].coeffs[j] * t);
-    for(i=1;i<KYBER_K;i++)
-    {
-      t = montgomery_reduce(4613* (uint32_t)b->vec[i].coeffs[j]);
-      r->coeffs[j] += montgomery_reduce(a->vec[i].coeffs[j] * t);
-    }
-    r->coeffs[j] = freeze(r->coeffs[j]);
-  }
-#endif
+    poly_invntt_tomont(&r->vec[i]);
 }
 
+/*************************************************
+* Name:        polyvec_basemul_acc_montgomery
+*
+* Description: Multiply elements in a and b in NTT domain, accumulate into r,
+*              and multiply by 2^-16.
+*
+* Arguments: - poly *r: pointer to output polynomial
+*            - const polyvec *a: pointer to first input vector of polynomials
+*            - const polyvec *b: pointer to second input vector of polynomials
+**************************************************/
+void polyvec_basemul_acc_montgomery(poly *r, const polyvec *a, const polyvec *b)
+{
+  unsigned int i;
+  poly tmp;
+
+  poly_basemul_montgomery(r,&a->vec[0],&b->vec[0]);
+  for(i=1;i<KYBER_K;i++) {
+    poly_basemul_montgomery(&tmp,&a->vec[i],&b->vec[i]);
+    poly_add(r,r,&tmp);
+  }
+}
+
+/*************************************************
+* Name:        polyvec_reduce
+*
+* Description: Applies Barrett reduction to each coefficient
+*              of each element of a vector of polynomials;
+*              for details of the Barrett reduction see comments in reduce.c
+*
+* Arguments:   - polyvec *r: pointer to input/output polynomial
+**************************************************/
+void polyvec_reduce(polyvec *r)
+{
+  unsigned int i;
+  for(i=0;i<KYBER_K;i++)
+    poly_reduce(&r->vec[i]);
+}
+
+/*************************************************
+* Name:        polyvec_add
+*
+* Description: Add vectors of polynomials
+*
+* Arguments: - polyvec *r:       pointer to output vector of polynomials
+*            - const polyvec *a: pointer to first input vector of polynomials
+*            - const polyvec *b: pointer to second input vector of polynomials
+**************************************************/
 void polyvec_add(polyvec *r, const polyvec *a, const polyvec *b)
 {
-  int i;
+  unsigned int i;
   for(i=0;i<KYBER_K;i++)
     poly_add(&r->vec[i], &a->vec[i], &b->vec[i]);
-
 }

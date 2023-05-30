@@ -1,31 +1,45 @@
-sudo: required
-
 language: c
-
-os:
-  - linux
-
+os: linux
+dist: bionic
 compiler:
   - gcc
   - clang
+arch:
+  - amd64
+  - arm64
+  - ppc64le
+  - s390x
+script: ./runtests.sh
 
-install:
-  - sudo apt-get update
-  - sudo apt-get install -y lcov
-  - gem install coveralls-lcov
+jobs:
+  include:
+    - os: osx
+      compiler: clang
+      env:
+        - CFLAGS="-I/usr/local/opt/openssl@1.1/include/"
+        - NISTFLAGS="-I/usr/local/opt/openssl@1.1/include/"
+        - LDFLAGS="-L/usr/local/opt/openssl@1.1/lib/"
 
-before_script:
-  - $CC -v
+    - stage: coverage
+      os: linux
+      compiler: gcc
+      before_install:
+        - sudo apt-get update
+        - sudo apt-get install -y lcov
+        - gem install coveralls-lcov
+      script: ./runlcov.sh
+      after_success:
+        - coveralls-lcov ref/kyber.lcov
 
-script:
-  - cd ref
-  - make test_kex512 CC=$CC CFLAGS="-fprofile-arcs -ftest-coverage -g -Wall -Wextra -O0 -fomit-frame-pointer -march=native -fPIC"
-  - make test_kex768 CC=$CC CFLAGS="-fprofile-arcs -ftest-coverage -g -Wall -Wextra -O0 -fomit-frame-pointer -march=native -fPIC"
-  - make test_kex1024 CC=$CC CFLAGS="-fprofile-arcs -ftest-coverage -g -Wall -Wextra -O0 -fomit-frame-pointer -march=native -fPIC"
-  - ./test_kex512
-  - ./test_kex768
-  - ./test_kex1024
+  allow_failures:
+    - os: windows
+      compiler: msvc19
+      before_install:
+        - choco install openssl
+      script:
+        - mkdir build
+        - cd build
+        - cmake -A x64 ..
+        - cmake --build .
+        - ctest --output-on-failure
 
-after_success:
-  - lcov -d . --capture --output-file coverage.info
-  - coveralls-lcov coverage.info

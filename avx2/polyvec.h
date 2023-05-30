@@ -1,6 +1,7 @@
 #ifndef POLYVEC_H
 #define POLYVEC_H
 
+#include <stdint.h>
 #include "params.h"
 #include "poly.h"
 
@@ -8,20 +9,28 @@ typedef struct{
   poly vec[KYBER_K];
 } polyvec;
 
-void polyvec_compress(unsigned char *r, const polyvec *a);
-void polyvec_decompress(polyvec *r, const unsigned char *a);
+#define polyvec_compress KYBER_NAMESPACE(polyvec_compress)
+void polyvec_compress(uint8_t r[KYBER_POLYVECCOMPRESSEDBYTES+2], const polyvec *a);
+#define polyvec_decompress KYBER_NAMESPACE(polyvec_decompress)
+void polyvec_decompress(polyvec *r, const uint8_t a[KYBER_POLYVECCOMPRESSEDBYTES+12]);
 
-void polyvec_tobytes(unsigned char *r, const polyvec *a);
-void polyvec_frombytes(polyvec *r, const unsigned char *a);
+#define polyvec_tobytes KYBER_NAMESPACE(polyvec_tobytes)
+void polyvec_tobytes(uint8_t r[KYBER_POLYVECBYTES], const polyvec *a);
+#define polyvec_frombytes KYBER_NAMESPACE(polyvec_frombytes)
+void polyvec_frombytes(polyvec *r, const uint8_t a[KYBER_POLYVECBYTES]);
 
+#define polyvec_ntt KYBER_NAMESPACE(polyvec_ntt)
 void polyvec_ntt(polyvec *r);
-void polyvec_invntt(polyvec *r);
+#define polyvec_invntt_tomont KYBER_NAMESPACE(polyvec_invntt_tomont)
+void polyvec_invntt_tomont(polyvec *r);
 
-void polyvec_pointwise_acc(poly *r, const polyvec *a, const polyvec *b);
-void polyvec_pointwise_acc_k2(poly *r, const polyvec *a, const polyvec *b) asm("polyvec_pointwise_acc_k2");
-void polyvec_pointwise_acc_k3(poly *r, const polyvec *a, const polyvec *b) asm("polyvec_pointwise_acc_k3");
-void polyvec_pointwise_acc_k4(poly *r, const polyvec *a, const polyvec *b) asm("polyvec_pointwise_acc_k4");
+#define polyvec_basemul_acc_montgomery KYBER_NAMESPACE(polyvec_basemul_acc_montgomery)
+void polyvec_basemul_acc_montgomery(poly *r, const polyvec *a, const polyvec *b);
 
+#define polyvec_reduce KYBER_NAMESPACE(polyvec_reduce)
+void polyvec_reduce(polyvec *r);
+
+#define polyvec_add KYBER_NAMESPACE(polyvec_add)
 void polyvec_add(polyvec *r, const polyvec *a, const polyvec *b);
 
 #endif

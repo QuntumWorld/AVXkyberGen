@@ -1,12 +1,12 @@
 #ifndef REDUCE_H
 #define REDUCE_H
 
-#include <stdint.h>
+#include "params.h"
+#include <immintrin.h>
 
-uint16_t freeze(uint16_t x);
-
-uint16_t montgomery_reduce(uint32_t a);
-
-uint16_t barrett_reduce(uint16_t a);
+#define reduce_avx KYBER_NAMESPACE(reduce_avx)
+void reduce_avx(__m256i *r, const __m256i *qdata);
+#define tomont_avx KYBER_NAMESPACE(tomont_avx)
+void tomont_avx(__m256i *r, const __m256i *qdata);
 
 #endif
